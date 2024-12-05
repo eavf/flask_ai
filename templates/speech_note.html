@@ -1,0 +1,191 @@
+{% extends 'base.html' %}
+
+{% block title %}Speech Note{% endblock %}
+
+{% block content %}
+    <div class="speech-note">
+        <h2>Create Note from Speech</h2>
+        <form id="speech-form" method="post" class="note-form">
+            <label for="url">Video/Audio URL</label>
+            <input type="url" name="url" id="url" required 
+                   placeholder="Enter YouTube URL or other media source">
+            
+            <div class="form-info">
+                <p>Supported sources:</p>
+                <ul>
+                    <li>YouTube videos</li>
+                    <li>Other online media sources</li>
+                </ul>
+            </div>
+
+            <div id="progress-container" style="display: none;">
+                <div class="progress-circles">
+                    <div class="progress-circle-container">
+                        <div class="progress-circle" id="download-progress">
+                            <svg viewBox="0 0 36 36" class="circular-chart">
+                                <path d="M18 2.0845
+                                    a 15.9155 15.9155 0 0 1 0 31.831
+                                    a 15.9155 15.9155 0 0 1 0 -31.831"
+                                    fill="none"
+                                    stroke="#eee"
+                                    stroke-width="2"/>
+                                <path d="M18 2.0845
+                                    a 15.9155 15.9155 0 0 1 0 31.831
+                                    a 15.9155 15.9155 0 0 1 0 -31.831"
+                                    fill="none"
+                                    stroke="#4caf50"
+                                    stroke-width="2"
+                                    class="progress"
+                                    stroke-dasharray="0, 100"/>
+                            </svg>
+                            <div class="progress-text">
+                                <span class="percentage">0%</span>
+                                <span class="label">Downloading</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="progress-circle-container">
+                        <div class="progress-circle" id="transcribe-progress">
+                            <svg viewBox="0 0 36 36" class="circular-chart">
+                                <path d="M18 2.0845
+                                    a 15.9155 15.9155 0 0 1 0 31.831
+                                    a 15.9155 15.9155 0 0 1 0 -31.831"
+                                    fill="none"
+                                    stroke="#eee"
+                                    stroke-width="2"/>
+                                <path d="M18 2.0845
+                                    a 15.9155 15.9155 0 0 1 0 31.831
+                                    a 15.9155 15.9155 0 0 1 0 -31.831"
+                                    fill="none"
+                                    stroke="#2196f3"
+                                    stroke-width="2"
+                                    class="progress"
+                                    stroke-dasharray="0, 100"/>
+                            </svg>
+                            <div class="progress-text">
+                                <span class="percentage">0%</span>
+                                <span class="label">Transcribing</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <p id="progress-status" class="status-text">Starting...</p>
+            </div>
+            
+            <button type="submit" id="submit-btn">Transcribe and Create Note</button>
+        </form>
+    </div>
+
+    <script>
+        document.getElementById('speech-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const form = this;
+            const submitBtn = document.getElementById('submit-btn');
+            const progressContainer = document.getElementById('progress-container');
+            const downloadProgress = document.querySelector('#download-progress .progress');
+            const transcribeProgress = document.querySelector('#transcribe-progress .progress');
+            const downloadPercentage = document.querySelector('#download-progress .percentage');
+            const transcribePercentage = document.querySelector('#transcribe-progress .percentage');
+            const progressStatus = document.getElementById('progress-status');
+            
+            submitBtn.disabled = true;
+            progressContainer.style.display = 'block';
+
+            let lastDownloadProgress = 0;
+            let lastTranscribeProgress = 0;
+            
+            function smoothProgress(current, target, element, percentageElement) {
+                const step = (target - current) / 10;
+                if (Math.abs(target - current) > 0.5) {
+                    const newProgress = current + step;
+                    const dashArray = `${newProgress}, 100`;
+                    element.style.strokeDasharray = dashArray;
+                    percentageElement.textContent = `${Math.round(newProgress)}%`;
+                    return newProgress;
+                }
+                return target;
+            }
+            
+            fetch('/speech_note', {
+                method: 'POST',
+                body: new FormData(form)
+            })
+            .then(response => response.json())
+            .then(data => {
+                const taskId = data.task_id;
+                checkProgress(taskId);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                progressStatus.textContent = 'Error: ' + error;
+                submitBtn.disabled = false;
+            });
+
+            function checkProgress(taskId) {
+                fetch('/progress/' + taskId)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'not_found') {
+                        progressStatus.textContent = 'Task not found';
+                        return;
+                    }
+
+                    switch(data.status) {
+                        case 'downloading':
+                            lastDownloadProgress = smoothProgress(
+                                lastDownloadProgress,
+                                data.progress,
+                                downloadProgress,
+                                downloadPercentage
+                            );
+                            progressStatus.textContent = 'Downloading audio...';
+                            setTimeout(() => checkProgress(taskId), 2000);
+                            break;
+                        case 'transcribing':
+                            lastDownloadProgress = smoothProgress(
+                                lastDownloadProgress,
+                                100,
+                                downloadProgress,
+                                downloadPercentage
+                            );
+                            lastTranscribeProgress = smoothProgress(
+                                lastTranscribeProgress,
+                                data.progress,
+                                transcribeProgress,
+                                transcribePercentage
+                            );
+                            progressStatus.textContent = 'Transcribing audio...';
+                            setTimeout(() => checkProgress(taskId), 2000);
+                            break;
+                        case 'completed':
+                            lastDownloadProgress = smoothProgress(
+                                lastDownloadProgress,
+                                100,
+                                downloadProgress,
+                                downloadPercentage
+                            );
+                            lastTranscribeProgress = smoothProgress(
+                                lastTranscribeProgress,
+                                100,
+                                transcribeProgress,
+                                transcribePercentage
+                            );
+                            progressStatus.textContent = 'Completed!';
+                            setTimeout(() => window.location.href = '/', 1000);
+                            break;
+                        case 'error':
+                            progressStatus.textContent = 'Error: ' + data.error;
+                            submitBtn.disabled = false;
+                            break;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    progressStatus.textContent = 'Error checking progress';
+                    submitBtn.disabled = false;
+                });
+            }
+        });
+    </script>
+{% endblock %}

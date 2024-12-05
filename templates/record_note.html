@@ -1,0 +1,268 @@
+{% extends 'base.html' %}
+
+{% block title %}Record Note{% endblock %}
+
+{% block content %}
+    <div class="record-note">
+        <h2>Create Note from Microphone</h2>
+        <div class="record-container">
+            <div class="record-status" id="recordStatus">Click to start recording</div>
+            <button id="recordButton" class="record-button">
+                <span class="record-icon"></span>
+                Start Recording
+            </button>
+            <div id="recordingTime" class="recording-time">00:00</div>
+            <div id="audioLevel" class="audio-level">Audio Level: 0</div>
+            
+            <div id="progress-container" style="display: none;">
+                <div class="progress-circle-container">
+                    <div class="progress-circle" id="transcribe-progress">
+                        <svg viewBox="0 0 36 36" class="circular-chart">
+                            <path d="M18 2.0845
+                                a 15.9155 15.9155 0 0 1 0 31.831
+                                a 15.9155 15.9155 0 0 1 0 -31.831"
+                                fill="none"
+                                stroke="#eee"
+                                stroke-width="2"/>
+                            <path d="M18 2.0845
+                                a 15.9155 15.9155 0 0 1 0 31.831
+                                a 15.9155 15.9155 0 0 1 0 -31.831"
+                                fill="none"
+                                stroke="#2196f3"
+                                stroke-width="2"
+                                class="progress"
+                                stroke-dasharray="0, 100"/>
+                        </svg>
+                        <div class="progress-text">
+                            <span class="percentage">0%</span>
+                            <span class="label">Transcribing</span>
+                        </div>
+                    </div>
+                </div>
+                <p id="progress-status" class="status-text">Processing...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let startTime;
+        let timerInterval;
+        let isRecording = false;
+        const recordButton = document.getElementById('recordButton');
+        const recordStatus = document.getElementById('recordStatus');
+        const recordingTime = document.getElementById('recordingTime');
+        const audioLevel = document.getElementById('audioLevel');
+        const progressContainer = document.getElementById('progress-container');
+        const transcribeProgress = document.querySelector('#transcribe-progress .progress');
+        const transcribePercentage = document.querySelector('#transcribe-progress .percentage');
+        const progressStatus = document.getElementById('progress-status');
+
+        function updateTimer() {
+            const now = new Date();
+            const diff = now - startTime;
+            const minutes = Math.floor(diff / 60000);
+            const seconds = Math.floor((diff % 60000) / 1000);
+            recordingTime.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        function updateAudioLevel() {
+            if (analyser && isRecording) {
+                const array = new Uint8Array(analyser.frequencyBinCount);
+                analyser.getByteFrequencyData(array);
+                const arraySum = array.reduce((a, value) => a + value, 0);
+                const average = arraySum / array.length;
+                audioLevel.textContent = `Audio Level: ${Math.round(average)}`;
+                requestAnimationFrame(updateAudioLevel);
+            }
+        }
+
+        recordButton.addEventListener('click', async () => {
+            if (!isRecording) {
+                // Start recording
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true
+                        }
+                    });
+
+                    // Set up audio context for level monitoring
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    analyser = audioContext.createAnalyser();
+                    microphone = audioContext.createMediaStreamSource(stream);
+                    microphone.connect(analyser);
+                    analyser.fftSize = 256;
+
+                    mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'audio/webm'
+                    });
+                    audioChunks = [];
+
+                    mediaRecorder.addEventListener('dataavailable', event => {
+                        audioChunks.push(event.data);
+                    });
+
+                    mediaRecorder.addEventListener('stop', async () => {
+                        if (audioChunks.length === 0) {
+                            recordStatus.textContent = 'No audio recorded';
+                            return;
+                        }
+
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                        
+                        // Convert to WAV using Web Audio API
+                        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                        const fileReader = new FileReader();
+                        
+                        fileReader.onload = async function() {
+                            const arrayBuffer = this.result;
+                            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                            
+                            // Convert to WAV
+                            const wavBuffer = audioBufferToWav(audioBuffer);
+                            const wavBlob = new Blob([wavBuffer], { type: 'audio/wav' });
+                            
+                            const formData = new FormData();
+                            formData.append('audio', wavBlob, 'recording.wav');
+                            
+                            progressContainer.style.display = 'block';
+                            
+                            try {
+                                const response = await fetch('/record_note', {
+                                    method: 'POST',
+                                    body: formData
+                                });
+                                
+                                if (response.ok) {
+                                    const data = await response.json();
+                                    checkProgress(data.task_id);
+                                } else {
+                                    throw new Error('Failed to upload audio');
+                                }
+                            } catch (error) {
+                                progressStatus.textContent = 'Error: ' + error.message;
+                            }
+                        };
+                        
+                        fileReader.readAsArrayBuffer(audioBlob);
+                    });
+
+                    mediaRecorder.start();
+                    startTime = new Date();
+                    timerInterval = setInterval(updateTimer, 1000);
+                    recordButton.textContent = 'Stop Recording';
+                    recordButton.classList.add('recording');
+                    recordStatus.textContent = 'Recording...';
+                    isRecording = true;
+                    updateAudioLevel();
+
+                } catch (err) {
+                    recordStatus.textContent = 'Error: ' + err.message;
+                }
+            } else {
+                // Stop recording
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                    mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                }
+                clearInterval(timerInterval);
+                recordButton.textContent = 'Start Recording';
+                recordButton.classList.remove('recording');
+                recordStatus.textContent = 'Processing...';
+                isRecording = false;
+                if (audioContext) {
+                    audioContext.close();
+                }
+            }
+        });
+
+        function checkProgress(taskId) {
+            fetch('/progress/' + taskId)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'not_found') {
+                    progressStatus.textContent = 'Task not found';
+                    return;
+                }
+
+                const dashArray = `${data.progress}, 100`;
+                transcribeProgress.style.strokeDasharray = dashArray;
+                transcribePercentage.textContent = `${Math.round(data.progress)}%`;
+
+                switch(data.status) {
+                    case 'transcribing':
+                        progressStatus.textContent = 'Transcribing audio...';
+                        setTimeout(() => checkProgress(taskId), 1000);
+                        break;
+                    case 'completed':
+                        progressStatus.textContent = 'Completed!';
+                        setTimeout(() => window.location.href = '/', 1000);
+                        break;
+                    case 'error':
+                        progressStatus.textContent = 'Error: ' + data.error;
+                        break;
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                progressStatus.textContent = 'Error checking progress';
+            });
+        }
+
+        // Function to convert AudioBuffer to WAV format
+        function audioBufferToWav(buffer) {
+            const numOfChan = buffer.numberOfChannels;
+            const length = buffer.length * numOfChan * 2;
+            const buffer2 = new ArrayBuffer(44 + length);
+            const view = new DataView(buffer2);
+            const channels = [];
+            let sample;
+            let offset = 0;
+            let pos = 0;
+
+            // write WAVE header
+            setUint32(0x46464952);                         // "RIFF"
+            setUint32(36 + length);                        // file length - 8
+            setUint32(0x45564157);                         // "WAVE"
+            setUint32(0x20746d66);                         // "fmt " chunk
+            setUint32(16);                                 // length = 16
+            setUint16(1);                                  // PCM (uncompressed)
+            setUint16(numOfChan);
+            setUint32(buffer.sampleRate);
+            setUint32(buffer.sampleRate * 2 * numOfChan);  // avg. bytes/sec
+            setUint16(numOfChan * 2);                      // block-align
+            setUint16(16);                                 // 16-bit
+            setUint32(0x61746164);                         // "data" - chunk
+            setUint32(length);                             // chunk length
+
+            // write interleaved data
+            for(let i = 0; i < buffer.numberOfChannels; i++)
+                channels.push(buffer.getChannelData(i));
+
+            while(pos < buffer.length) {
+                for(let i = 0; i < numOfChan; i++) {
+                    sample = Math.max(-1, Math.min(1, channels[i][pos]));
+                    sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767)|0;
+                    view.setInt16(44 + offset, sample, true); offset += 2;
+                }
+                pos++;
+            }
+
+            return buffer2;
+
+            function setUint16(data) {
+                view.setUint16(pos, data, true);
+                pos += 2;
+            }
+
+            function setUint32(data) {
+                view.setUint32(pos, data, true);
+                pos += 4;
+            }
+        }
+    </script>
+{% endblock %}

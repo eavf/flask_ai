@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+
+{% block title %}Notes{% endblock %}
+
+{% block content %}
+    <div class="notes">
+        {% if notes %}
+            {% for note in notes %}
+                <article class="note">
+                    <header>
+                        <h2>{{ note['title'] }}</h2>
+                        <div class="actions">
+                            <a href="{{ url_for('edit', id=note['id']) }}" class="edit">Edit</a>
+                            <form action="{{ url_for('delete', id=note['id']) }}" method="post" class="delete">
+                                <button type="submit" onclick="return confirm('Are you sure?');">Delete</button>
+                            </form>
+                        </div>
+                    </header>
+                    <p class="content">{{ note['content'] }}</p>
+                    <p class="created">Created on {{ note['created'] }}</p>
+                    {% if note['duration'] %}
+                        <p class="duration">Duration: {{ '%d:%02d' % (note['duration'] // 60, note['duration'] % 60) }}</p>
+                    {% endif %}
+                </article>
+            {% endfor %}
+        {% else %}
+            <p class="empty">No notes yet. Create your first note!</p>
+        {% endif %}
+    </div>
+{% endblock %}
